@@ -2,12 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Swil Flow is a downstream fork of Handy. Repository guidance should reflect the current fork branding and local development workflow rather than the original upstream packaging defaults.
+
 ## Development Commands
 
 **Prerequisites:**
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [Bun](https://bun.sh/) package manager
+- `cmake`
 
 **Core Development:**
 
@@ -15,13 +18,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 bun install
 
-# Run in development mode
-bun run tauri dev
-# If cmake error on macOS:
-CMAKE_POLICY_VERSION_MINIMUM=3.5 bun run tauri dev
+# Separate dev data from the installed production app
+mkdir -p src-tauri/target/debug/Data
+printf "Handy Portable Mode\n" > src-tauri/target/debug/portable
+
+# Verify Rust side
+cargo check --manifest-path src-tauri/Cargo.toml
+
+# Run the fork-specific development app
+bun run app:dev
 
 # Build for production
-bun run tauri build
+bun run app:build
 
 # Frontend only development
 bun run dev        # Start Vite dev server
@@ -39,9 +47,14 @@ mkdir -p src-tauri/resources/models
 curl -o src-tauri/resources/models/silero_vad_v4.onnx https://blob.handy.computer/silero_vad_v4.onnx
 ```
 
+**Apple Intelligence Note:**
+
+- On macOS with only Command Line Tools active, this fork automatically builds Apple Intelligence stubs
+- Full Xcode is only required if you specifically want the real Apple Intelligence bridge compiled
+
 ## Architecture Overview
 
-Handy is a cross-platform desktop speech-to-text application built with Tauri (Rust backend + React/TypeScript frontend).
+Swil Flow is a macOS-first desktop speech-to-text application built with Tauri (Rust backend + React/TypeScript frontend) and derived from Handy.
 
 ### Core Components
 
@@ -65,7 +78,7 @@ Handy is a cross-platform desktop speech-to-text application built with Tauri (R
 - `components/settings/` - Settings UI components
 - `components/model-selector/` - Model management interface
 - `hooks/` - React hooks for settings and model management
-- `lib/types.ts` - Shared TypeScript type definitions
+- `lib/types/events.ts` - Shared frontend event type definitions
 
 ### Key Architecture Patterns
 
@@ -112,3 +125,9 @@ Settings are stored using Tauri's store plugin with reactive updates:
 ### Single Instance Architecture
 
 The app enforces single instance behavior - launching when already running brings the settings window to front rather than creating a new process.
+
+### Branding and App Identity
+
+- Production app: `Swil Flow` / `com.supwilsoft.swilflow`
+- Development app: `Swil Flow Dev` / `com.supwilsoft.swilflow.dev`
+- Prefer the dev config and portable mode during local development to avoid polluting installed production data

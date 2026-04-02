@@ -65,6 +65,26 @@ pub struct HistoryEntry {
     pub post_process_requested: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+#[serde(tag = "type")]
+pub enum ExportFilter {
+    All,
+    TimeRange {
+        from_timestamp: i64,
+        to_timestamp: i64,
+    },
+    SelectedIds {
+        ids: Vec<i64>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
+pub enum ExportFormat {
+    Csv,
+    Markdown,
+    Json,
+}
+
 pub struct HistoryManager {
     app_handle: AppHandle,
     recordings_dir: PathBuf,
@@ -646,6 +666,192 @@ impl HistoryManager {
         } else {
             format!("Recording {}", timestamp)
         }
+    }
+
+    /// Query entries for export with optional filtering.
+    /// Returns entries in chronological order (oldest first) for readable export output.
+    pub fn get_entries_for_export(&self, filter: &ExportFilter) -> Result<Vec<HistoryEntry>> {
+        let conn = self.get_connection()?;
+
+        let entries = match filter {
+            ExportFilter::All => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text,
+                            post_processed_text, post_process_prompt, post_process_requested
+                     FROM transcription_history
+                     ORDER BY timestamp ASC",
+                )?;
+                let result = stmt
+                    .query_map([], Self::map_history_entry)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                result
+            }
+            ExportFilter::TimeRange {
+                from_timestamp,
+                to_timestamp,
+            } => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text,
+                            post_processed_text, post_process_prompt, post_process_requested
+                     FROM transcription_history
+                     WHERE timestamp >= ?1 AND timestamp <= ?2
+                     ORDER BY timestamp ASC",
+                )?;
+                let result = stmt
+                    .query_map(
+                        params![from_timestamp, to_timestamp],
+                        Self::map_history_entry,
+                    )?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                result
+            }
+            ExportFilter::SelectedIds { ids } => {
+                if ids.is_empty() {
+                    return Ok(Vec::new());
+                }
+                // Build dynamic IN clause
+                let placeholders: Vec<String> = ids
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| format!("?{}", i + 1))
+                    .collect();
+                let sql = format!(
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text,
+                            post_processed_text, post_process_prompt, post_process_requested
+                     FROM transcription_history
+                     WHERE id IN ({})
+                     ORDER BY timestamp ASC",
+                    placeholders.join(", ")
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let params: Vec<Box<dyn rusqlite::types::ToSql>> = ids
+                    .iter()
+                    .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+                    .collect();
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+                let result = stmt
+                    .query_map(param_refs.as_slice(), Self::map_history_entry)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                result
+            }
+        };
+
+        Ok(entries)
+    }
+
+    /// Export history entries to a file in the specified format.
+    pub fn export_to_file(
+        &self,
+        file_path: &str,
+        format: &ExportFormat,
+        filter: &ExportFilter,
+    ) -> Result<usize> {
+        let entries = self.get_entries_for_export(filter)?;
+        let content = match format {
+            ExportFormat::Csv => Self::format_csv(&entries),
+            ExportFormat::Markdown => Self::format_markdown(&entries),
+            ExportFormat::Json => Self::format_json(&entries)?,
+        };
+        std::fs::write(file_path, content)?;
+        Ok(entries.len())
+    }
+
+    fn format_timestamp_iso(timestamp: i64) -> String {
+        DateTime::from_timestamp(timestamp, 0)
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+            .unwrap_or_else(|| format!("{}", timestamp))
+    }
+
+    /// Format entries as RFC 4180 CSV.
+    fn format_csv(entries: &[HistoryEntry]) -> String {
+        let mut out = String::from("Date,Title,Transcription,Post-Processed Text\n");
+        for entry in entries {
+            out.push_str(&Self::csv_escape(&Self::format_timestamp_iso(
+                entry.timestamp,
+            )));
+            out.push(',');
+            out.push_str(&Self::csv_escape(&entry.title));
+            out.push(',');
+            out.push_str(&Self::csv_escape(&entry.transcription_text));
+            out.push(',');
+            out.push_str(&Self::csv_escape(
+                entry.post_processed_text.as_deref().unwrap_or(""),
+            ));
+            out.push('\n');
+        }
+        out
+    }
+
+    fn csv_escape(field: &str) -> String {
+        if field.contains('"')
+            || field.contains(',')
+            || field.contains('\n')
+            || field.contains('\r')
+        {
+            format!("\"{}\"", field.replace('"', "\"\""))
+        } else {
+            format!("\"{}\"", field)
+        }
+    }
+
+    /// Format entries as Markdown.
+    fn format_markdown(entries: &[HistoryEntry]) -> String {
+        let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let mut out = format!("# Swil Flow Export — {}\n\n", now_iso);
+
+        for (i, entry) in entries.iter().enumerate() {
+            out.push_str(&format!("## {}\n\n", entry.title));
+            out.push_str(&entry.transcription_text);
+            out.push('\n');
+
+            if let Some(ref pp) = entry.post_processed_text {
+                if !pp.is_empty() {
+                    out.push_str(&format!("\n**Post-processed:** {}\n", pp));
+                }
+            }
+
+            if i < entries.len() - 1 {
+                out.push_str("\n---\n\n");
+            }
+        }
+
+        out
+    }
+
+    /// Format entries as pretty-printed JSON.
+    fn format_json(entries: &[HistoryEntry]) -> Result<String> {
+        #[derive(Serialize)]
+        struct ExportPayload {
+            exported_at: String,
+            entries: Vec<ExportJsonEntry>,
+        }
+
+        #[derive(Serialize)]
+        struct ExportJsonEntry {
+            id: i64,
+            date: String,
+            title: String,
+            transcription_text: String,
+            post_processed_text: Option<String>,
+        }
+
+        let payload = ExportPayload {
+            exported_at: Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            entries: entries
+                .iter()
+                .map(|e| ExportJsonEntry {
+                    id: e.id,
+                    date: Self::format_timestamp_iso(e.timestamp),
+                    title: e.title.clone(),
+                    transcription_text: e.transcription_text.clone(),
+                    post_processed_text: e.post_processed_text.clone(),
+                })
+                .collect(),
+        };
+
+        serde_json::to_string_pretty(&payload)
+            .map_err(|e| anyhow!("JSON serialization failed: {}", e))
     }
 }
 

@@ -1,6 +1,6 @@
 # Build Instructions
 
-This guide covers how to set up the development environment and build Handy from source across different platforms.
+This guide covers how to set up the development environment and build Swil Flow, a downstream fork of Handy.
 
 ## Prerequisites
 
@@ -8,6 +8,7 @@ This guide covers how to set up the development environment and build Handy from
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [Bun](https://bun.sh/) package manager
+- `cmake`
 - [Tauri Prerequisites](https://tauri.app/start/prerequisites/)
 
 ### Platform-Specific Requirements
@@ -16,6 +17,8 @@ This guide covers how to set up the development environment and build Handy from
 
 - Xcode Command Line Tools
 - Install with: `xcode-select --install`
+- Full Xcode is optional for local development
+- If full Xcode is not active, Apple Intelligence support automatically falls back to stubs
 
 #### Windows
 
@@ -52,8 +55,8 @@ This guide covers how to set up the development environment and build Handy from
 ### 1. Clone the Repository
 
 ```bash
-git clone git@github.com:cjpais/Handy.git
-cd Handy
+git clone <your-fork-url> swilflow
+cd swilflow
 ```
 
 ### 2. Install Dependencies
@@ -62,69 +65,52 @@ cd Handy
 bun install
 ```
 
-### 3. Start Dev Server
+### 3. Separate Dev Data from Production
 
 ```bash
-bun tauri dev
+mkdir -p src-tauri/target/debug/Data
+printf "Handy Portable Mode\n" > src-tauri/target/debug/portable
 ```
 
-### 4. Build for Production
+### 4. Verify the Rust Side
 
 ```bash
-bun run tauri build
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-This compiles a release binary and generates platform-specific bundles (deb, rpm, AppImage on Linux; dmg on macOS; msi on Windows).
-
-## Linux Install (from source)
-
-The raw binary (`src-tauri/target/release/handy`) cannot run standalone — it needs Tauri resource files (tray icons, sounds, VAD model) to be co-located at the expected path.
-
-**Install from the deb bundle** (works on any Linux distro):
+### 5. Start the Dev App
 
 ```bash
-cd /tmp
-ar x /path/to/Handy/src-tauri/target/release/bundle/deb/Handy_*_amd64.deb data.tar.gz
-tar xzf data.tar.gz
-sudo cp usr/bin/handy /usr/bin/
-sudo cp -r usr/lib/Handy /usr/lib/
-sudo cp -r usr/share/icons/hicolor/* /usr/share/icons/hicolor/
-sudo cp usr/share/applications/Handy.desktop /usr/share/applications/
+bun run app:dev
 ```
 
-After subsequent rebuilds, only the binary needs re-copying:
+This launches the fork-specific dev configuration:
+
+- Product name: `Swil Flow Dev`
+- Bundle identifier: `com.supwilsoft.swilflow.dev`
+
+### 6. Build for Production
 
 ```bash
-sudo cp src-tauri/target/release/handy /usr/bin/
+bun run app:build
 ```
 
-Resources only need re-copying if they change upstream (new icons, sounds, etc.).
+This builds the production-branded app:
 
-## Troubleshooting
+- Product name: `Swil Flow`
+- Bundle identifier: `com.supwilsoft.swilflow`
 
-### AppImage build fails on Arch / rolling-release distros
-
-`linuxdeploy` bundles its own `strip` binary which is too old to process system libraries built with newer toolchains on rolling-release distros (Arch, CachyOS, Manjaro, EndeavourOS).
-
-The error from Tauri:
-
-```
-Bundling Handy_*_amd64.AppImage
-failed to bundle project `failed to run linuxdeploy`
-```
-
-Tauri swallows the real linuxdeploy error. To see it, run linuxdeploy manually:
+## Frontend Only Development
 
 ```bash
-cd src-tauri/target/release/bundle/appimage
-~/.cache/tauri/linuxdeploy-x86_64.AppImage --appimage-extract-and-run \
-  --appdir Handy.AppDir --plugin gtk --output appimage
+bun run dev
+bun run build
+bun run preview
 ```
 
-**Workaround:** The binary, deb, and rpm bundles all build fine — only the AppImage step fails. To skip it:
+## Notes
 
-```bash
-bun run tauri build -- --bundles deb
-```
-
-Then install using the deb extraction method above.
+- Automatic updates are currently disabled in this fork
+- Tauri updater artifacts are not generated
+- The low-level Cargo binary name may still appear as `handy` during build output
+- The portable marker string intentionally remains `Handy Portable Mode` because that is what the current runtime checks for

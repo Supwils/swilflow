@@ -4,19 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-**Prerequisites:** [Rust](https://rustup.rs/) (latest stable), [Bun](https://bun.sh/)
+**Prerequisites:** [Rust](https://rustup.rs/) (latest stable), [Bun](https://bun.sh/), `cmake`
 
 ```bash
 # Install dependencies
 bun install
 
-# Run in development mode
-bun run tauri dev
-# If cmake error on macOS:
-CMAKE_POLICY_VERSION_MINIMUM=3.5 bun run tauri dev
+# Separate dev data from any installed production build
+mkdir -p src-tauri/target/debug/Data
+printf "Handy Portable Mode\n" > src-tauri/target/debug/portable
+
+# Verify the Rust side
+cargo check --manifest-path src-tauri/Cargo.toml
+
+# Run the fork-specific development app
+bun run app:dev
 
 # Build for production
-bun run tauri build
+bun run app:build
 
 # Linting and formatting (run before committing)
 bun run lint              # ESLint for frontend
@@ -32,9 +37,11 @@ mkdir -p src-tauri/resources/models
 curl -o src-tauri/resources/models/silero_vad_v4.onnx https://blob.handy.computer/silero_vad_v4.onnx
 ```
 
+If full Xcode is not active on macOS, this fork automatically falls back to Apple Intelligence stubs during build.
+
 ## Architecture Overview
 
-Handy is a cross-platform desktop speech-to-text app built with Tauri 2.x (Rust backend + React/TypeScript frontend).
+Swil Flow is a macOS-first speech-to-text desktop app built with Tauri 2.x (Rust backend + React/TypeScript frontend) and derived from Handy.
 
 ### Backend Structure (src-tauri/src/)
 
@@ -121,7 +128,7 @@ Use conventional commits:
 
 ## CLI Parameters
 
-Handy supports command-line parameters on all platforms for integration with scripts, window managers, and autostart configurations.
+Swil Flow inherits Handy's command-line integration patterns, though branding and packaging in this fork are being migrated to Swil Flow.
 
 **Implementation files:**
 

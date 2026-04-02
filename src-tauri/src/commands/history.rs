@@ -1,6 +1,6 @@
 use crate::actions::process_transcription_output;
 use crate::managers::{
-    history::{HistoryManager, PaginatedHistory},
+    history::{ExportFilter, ExportFormat, HistoryManager, PaginatedHistory},
     transcription::TranscriptionManager,
 };
 use std::sync::Arc;
@@ -151,4 +151,18 @@ pub async fn update_recording_retention_period(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn export_history(
+    _app: AppHandle,
+    history_manager: State<'_, Arc<HistoryManager>>,
+    file_path: String,
+    format: ExportFormat,
+    filter: ExportFilter,
+) -> Result<usize, String> {
+    history_manager
+        .export_to_file(&file_path, &format, &filter)
+        .map_err(|e| e.to_string())
 }

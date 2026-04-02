@@ -124,6 +124,7 @@ fn build_apple_intelligence_bridge() {
     println!("cargo:rerun-if-changed={REAL_SWIFT_FILE}");
     println!("cargo:rerun-if-changed={STUB_SWIFT_FILE}");
     println!("cargo:rerun-if-changed={BRIDGE_HEADER}");
+    println!("cargo:rerun-if-env-changed=SWILFLOW_DISABLE_APPLE_INTELLIGENCE");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
     let object_path = out_dir.join("apple_intelligence.o");
@@ -144,10 +145,37 @@ fn build_apple_intelligence_bridge() {
     let framework_path =
         Path::new(&sdk_path).join("System/Library/Frameworks/FoundationModels.framework");
     let has_foundation_models = framework_path.exists();
+    let developer_dir = String::from_utf8(
+        Command::new("xcode-select")
+            .arg("-p")
+            .output()
+            .expect("Failed to locate active developer directory")
+            .stdout,
+    )
+    .unwrap_or_default()
+    .trim()
+    .to_string();
+    let has_full_xcode = developer_dir.contains(".app/Contents/Developer");
+    let force_stub = env::var("SWILFLOW_DISABLE_APPLE_INTELLIGENCE")
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !matches!(normalized.as_str(), "" | "0" | "false" | "no")
+        })
+        .unwrap_or(false);
 
-    let source_file = if has_foundation_models {
+    let source_file = if force_stub {
+        println!(
+            "cargo:warning=Apple Intelligence disabled via SWILFLOW_DISABLE_APPLE_INTELLIGENCE. Building with stubs."
+        );
+        STUB_SWIFT_FILE
+    } else if has_foundation_models && has_full_xcode {
         println!("cargo:warning=Building with Apple Intelligence support.");
         REAL_SWIFT_FILE
+    } else if has_foundation_models {
+        println!(
+            "cargo:warning=FoundationModels SDK found, but full Xcode is not active. Building with stubs."
+        );
+        STUB_SWIFT_FILE
     } else {
         println!("cargo:warning=Apple Intelligence SDK not found. Building with stubs.");
         STUB_SWIFT_FILE
@@ -229,7 +257,7 @@ fn build_apple_intelligence_bridge() {
     println!("cargo:rustc-link-search=native={}", sdk_swift_lib.display());
     println!("cargo:rustc-link-lib=framework=Foundation");
 
-    if has_foundation_models {
+    if has_foundation_models && source_file == REAL_SWIFT_FILE {
         // Use weak linking so the app can launch on systems without FoundationModels
         println!("cargo:rustc-link-arg=-weak_framework");
         println!("cargo:rustc-link-arg=FoundationModels");

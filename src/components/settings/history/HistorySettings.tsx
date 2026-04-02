@@ -1,7 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { Check, Copy, FolderOpen, RotateCcw, Star, Trash2 } from "lucide-react";
+import {
+  Check,
+  CheckSquare,
+  Copy,
+  Download,
+  FolderOpen,
+  RotateCcw,
+  Square,
+  Star,
+  Trash2,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -12,8 +22,10 @@ import {
 } from "@/bindings";
 import { useOsType } from "@/hooks/useOsType";
 import { formatDateTime } from "@/utils/dateFormat";
+import type { ExportFormat } from "@/bindings";
 import { AudioPlayer } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
+import { ExportPanel, type ExportScope } from "./ExportPanel";
 
 const IconButton: React.FC<{
   onClick: () => void;
@@ -68,6 +80,15 @@ export const HistorySettings: React.FC = () => {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const entriesRef = useRef<HistoryEntry[]>([]);
   const loadingRef = useRef(false);
+  const [showExportPanel, setShowExportPanel] = useState(false);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const exportButtonRef = useRef<HTMLDivElement>(null);
+
+  // Export panel state — lifted here so it persists across panel open/close
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("Csv");
+  const [exportScope, setExportScope] = useState<ExportScope>("all");
+  const [exportTimeRange, setExportTimeRange] = useState("7d");
 
   // Keep ref in sync for use in IntersectionObserver callback
   useEffect(() => {
@@ -234,6 +255,31 @@ export const HistorySettings: React.FC = () => {
     }
   };
 
+  const toggleEntrySelection = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const selectAllLoaded = () => {
+    setSelectedIds(new Set(entries.map((e) => e.id)));
+  };
+
+  const deselectAll = () => {
+    setSelectedIds(new Set());
+  };
+
+  const exitSelectMode = () => {
+    setIsSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
   let content: React.ReactNode;
 
   if (loading) {
@@ -261,6 +307,9 @@ export const HistorySettings: React.FC = () => {
               getAudioUrl={getAudioUrl}
               deleteAudio={deleteAudioEntry}
               retryTranscription={retryHistoryEntry}
+              isSelectMode={isSelectMode}
+              isSelected={selectedIds.has(entry.id)}
+              onToggleSelect={() => toggleEntrySelection(entry.id)}
             />
           ))}
         </div>
@@ -279,10 +328,90 @@ export const HistorySettings: React.FC = () => {
               {t("settings.history.title")}
             </h2>
           </div>
-          <OpenRecordingsButton
-            onClick={openRecordingsFolder}
-            label={t("settings.history.openFolder")}
-          />
+          <div className="flex items-center gap-2">
+            {isSelectMode && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={
+                    selectedIds.size === entries.length
+                      ? deselectAll
+                      : selectAllLoaded
+                  }
+                >
+                  {selectedIds.size === entries.length
+                    ? t("settings.history.export.deselectAll")
+                    : t("settings.history.export.selectAll")}
+                </Button>
+                <span className="text-xs text-text/60">
+                  {t("settings.history.export.selectedCount", {
+                    count: selectedIds.size,
+                  })}
+                </span>
+                <Button variant="ghost" size="sm" onClick={exitSelectMode}>
+                  {t("settings.history.export.exitSelectMode")}
+                </Button>
+              </>
+            )}
+            <div className="relative" ref={exportButtonRef}>
+              <Button
+                onClick={() => {
+                  // Auto-set scope to "selected" when opening panel in select mode
+                  if (isSelectMode && selectedIds.size > 0) {
+                    setExportScope("selected");
+                  }
+                  setShowExportPanel((prev) => !prev);
+                }}
+                variant={
+                  isSelectMode && selectedIds.size > 0
+                    ? "primary-soft"
+                    : "secondary"
+                }
+                size="sm"
+                className="flex items-center gap-2"
+                title={t("settings.history.export.button")}
+              >
+                <Download className="w-4 h-4" />
+                <span>
+                  {isSelectMode && selectedIds.size > 0
+                    ? t("settings.history.export.exportSelected", {
+                        count: selectedIds.size,
+                      })
+                    : t("settings.history.export.button")}
+                </span>
+              </Button>
+              {showExportPanel && (
+                <ExportPanel
+                  onClose={() => setShowExportPanel(false)}
+                  selectedIds={selectedIds}
+                  isSelectMode={isSelectMode}
+                  onEnterSelectMode={() => {
+                    setIsSelectMode(true);
+                    setExportScope("selected");
+                    setShowExportPanel(false);
+                  }}
+                  onExportSuccess={() => {
+                    // Clear selection after successful export
+                    if (exportScope === "selected") {
+                      setIsSelectMode(false);
+                      setSelectedIds(new Set());
+                    }
+                  }}
+                  format={exportFormat}
+                  onFormatChange={setExportFormat}
+                  scope={exportScope}
+                  onScopeChange={setExportScope}
+                  timeRange={exportTimeRange}
+                  onTimeRangeChange={setExportTimeRange}
+                />
+              )}
+            </div>
+            <OpenRecordingsButton
+              onClick={openRecordingsFolder}
+              label={t("settings.history.openFolder")}
+            />
+          </div>
         </div>
         <div className="bg-background border border-mid-gray/20 rounded-lg overflow-visible">
           {content}
@@ -299,6 +428,9 @@ interface HistoryEntryProps {
   getAudioUrl: (fileName: string) => Promise<string | null>;
   deleteAudio: (id: number) => Promise<void>;
   retryTranscription: (id: number) => Promise<void>;
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: () => void;
 }
 
 const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
@@ -308,6 +440,9 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   getAudioUrl,
   deleteAudio,
   retryTranscription,
+  isSelectMode = false,
+  isSelected = false,
+  onToggleSelect,
 }) => {
   const { t, i18n } = useTranslation();
   const [showCopied, setShowCopied] = useState(false);
@@ -354,9 +489,34 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   const formattedDate = formatDateTime(String(entry.timestamp), i18n.language);
 
   return (
-    <div className="px-4 py-2 pb-5 flex flex-col gap-3">
+    <div
+      className={`px-4 py-2 pb-5 flex flex-col gap-3 ${isSelectMode ? "cursor-pointer hover:bg-mid-gray/5" : ""}`}
+      onClick={isSelectMode ? onToggleSelect : undefined}
+    >
       <div className="flex justify-between items-center">
-        <p className="text-sm font-medium">{formattedDate}</p>
+        <div className="flex items-center gap-2">
+          {isSelectMode && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSelect?.();
+              }}
+              className="text-text/60 hover:text-logo-primary transition-colors cursor-pointer"
+            >
+              {isSelected ? (
+                <CheckSquare
+                  width={18}
+                  height={18}
+                  className="text-logo-primary"
+                />
+              ) : (
+                <Square width={18} height={18} />
+              )}
+            </button>
+          )}
+          <p className="text-sm font-medium">{formattedDate}</p>
+        </div>
         <div className="flex items-center">
           <IconButton
             onClick={handleCopyText}
