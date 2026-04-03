@@ -1142,6 +1142,18 @@ pub fn change_whisper_gpu_device(app: AppHandle, device: i32) -> Result<(), Stri
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn change_accent_color_setting(
+    app: AppHandle,
+    color: settings::AccentColor,
+) -> Result<(), String> {
+    let mut s = settings::get_settings(&app);
+    s.accent_color = color;
+    settings::write_settings(&app, s);
+    Ok(())
+}
+
 /// Return which accelerators and GPU devices are available for this build.
 #[tauri::command]
 #[specta::specta]

@@ -20,23 +20,32 @@ interface ExportPanelProps {
   onScopeChange: (scope: ExportScope) => void;
   timeRange: string;
   onTimeRangeChange: (range: string) => void;
+  /** Ref to the element that opens the panel (e.g. the Export button wrapper).
+   *  Clicks on this element are excluded from the click-outside handler so the
+   *  button's own onClick toggle can close the panel correctly. */
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }
 
-const FORMAT_OPTIONS: { value: ExportFormat; label: string; ext: string }[] = [
-  { value: "Csv", label: "settings.history.export.csv", ext: "csv" },
-  {
-    value: "Markdown",
-    label: "settings.history.export.markdown",
-    ext: "md",
-  },
-  { value: "Json", label: "settings.history.export.json", ext: "json" },
+const FORMAT_OPTIONS: {
+  value: ExportFormat;
+  label: string;
+  ext: string;
+  /** Display name used in the native save-dialog filter (must be user-friendly). */
+  displayName: string;
+}[] = [
+  { value: "Csv",      label: "settings.history.export.csv",      ext: "csv",  displayName: "CSV" },
+  { value: "Markdown", label: "settings.history.export.markdown",  ext: "md",   displayName: "Markdown" },
+  { value: "Json",     label: "settings.history.export.json",      ext: "json", displayName: "JSON" },
 ];
 
+// "All time" is intentionally excluded from Time Range presets: the user
+// should use the "All entries" scope instead. Having it here caused the
+// buildFilter() function to silently return ExportFilter::All while the UI
+// still showed "Time range" as the selected scope — a confusing mismatch.
 const TIME_RANGE_OPTIONS = [
-  { value: "7d", label: "settings.history.export.last7days", days: 7 },
-  { value: "30d", label: "settings.history.export.last30days", days: 30 },
-  { value: "3m", label: "settings.history.export.last3months", days: 90 },
-  { value: "all", label: "settings.history.export.allTime", days: 0 },
+  { value: "7d",  label: "settings.history.export.last7days",   days: 7 },
+  { value: "30d", label: "settings.history.export.last30days",  days: 30 },
+  { value: "3m",  label: "settings.history.export.last3months", days: 90 },
 ];
 
 export const ExportPanel: React.FC<ExportPanelProps> = ({
@@ -51,24 +60,27 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
   onScopeChange,
   timeRange,
   onTimeRangeChange,
+  anchorRef,
 }) => {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState(false);
 
-  // Click-outside to close
+  // Click-outside to close.
+  // Clicks on the anchorRef element (the Export button) are intentionally
+  // excluded — the button's own onClick toggle handles open/close in that case.
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (
-        panelRef.current &&
-        !panelRef.current.contains(event.target as Node)
-      ) {
+      const target = event.target as Node;
+      const insidePanel = panelRef.current?.contains(target) ?? false;
+      const insideAnchor = anchorRef?.current?.contains(target) ?? false;
+      if (!insidePanel && !insideAnchor) {
         onClose();
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
   const buildFilter = (): ExportFilter => {
     switch (scope) {
@@ -76,11 +88,14 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
         return { type: "All" };
       case "timeRange": {
         const option = TIME_RANGE_OPTIONS.find((o) => o.value === timeRange);
-        if (!option || option.days === 0) {
-          return { type: "All" };
+        if (!option) {
+          // Fallback: use the first option if the stored value is unrecognised
+          const first = TIME_RANGE_OPTIONS[0];
+          const now = Math.floor(Date.now() / 1000);
+          return { type: "TimeRange", from_timestamp: now - first.days * 86400, to_timestamp: now };
         }
         const now = Math.floor(Date.now() / 1000);
-        const from = now - option.days * 24 * 60 * 60;
+        const from = now - option.days * 86400;
         return { type: "TimeRange", from_timestamp: from, to_timestamp: now };
       }
       case "selected":
@@ -101,7 +116,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
       defaultPath: `swilflow-export.${ext}`,
       filters: [
         {
-          name: `${formatOption?.value ?? "CSV"} Files`,
+          name: `${formatOption?.displayName ?? "CSV"} Files`,
           extensions: [ext],
         },
       ],

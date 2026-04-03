@@ -368,6 +368,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_keyboard_implementation_setting,
             shortcut::get_keyboard_implementation,
             shortcut::change_show_tray_icon_setting,
+            shortcut::change_accent_color_setting,
             shortcut::change_whisper_accelerator_setting,
             shortcut::change_ort_accelerator_setting,
             shortcut::change_whisper_gpu_device,
@@ -426,6 +427,11 @@ pub fn run(cli_args: CliArgs) {
             commands::history::update_history_limit,
             commands::history::update_recording_retention_period,
             commands::history::export_history,
+            commands::history::transcribe_audio_file,
+            commands::history::save_imported_transcription,
+            commands::history::discard_imported_transcription,
+            commands::history::search_history_entries,
+            commands::history::get_history_stats,
             helpers::clamshell::is_laptop,
         ])
         .events(collect_events![managers::history::HistoryUpdatePayload,]);

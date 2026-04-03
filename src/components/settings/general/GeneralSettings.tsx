@@ -11,6 +11,8 @@ import { useSettings } from "../../../hooks/useSettings";
 import { VolumeSlider } from "../VolumeSlider";
 import { MuteWhileRecording } from "../MuteWhileRecording";
 import { ModelSettingsCard } from "./ModelSettingsCard";
+import { ImportAudio } from "./ImportAudio";
+import { AccentColorPicker } from "./AccentColorPicker";
 
 export const GeneralSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -39,6 +41,8 @@ export const GeneralSettings: React.FC = () => {
         />
         <VolumeSlider disabled={!audioFeedbackEnabled} />
       </SettingsGroup>
+      <AccentColorPicker />
+      <ImportAudio />
     </div>
   );
 };

@@ -195,6 +195,38 @@
       "pushToTalk": {
         "label": "Push To Talk",
         "description": "Hold to record, release to stop"
+      },
+      "accentColor": {
+        "title": "Accent Color",
+        "pink": "Pink",
+        "gold": "Gold",
+        "orange": "Orange",
+        "green": "Green",
+        "blue": "Blue",
+        "purple": "Purple",
+        "coral": "Coral"
+      },
+      "importAudio": {
+        "title": "Import Audio File",
+        "description": "Transcribe an external audio file using the active model",
+        "chooseFile": "Choose File",
+        "noFileSelected": "No file selected",
+        "supportedFormats": "Supported: WAV files (.wav)",
+        "process": "Process",
+        "processing": "Processing...",
+        "result": "Transcription Result",
+        "saveToHistory": "Save to History",
+        "discard": "Discard",
+        "copy": "Copy",
+        "copied": "Copied!",
+        "saved": "Saved to history",
+        "saveError": "Failed to save to history",
+        "noModel": "No model loaded. Please load a model first.",
+        "errors": {
+          "noFile": "Please select a file first.",
+          "failed": "Transcription failed: {{error}}",
+          "empty": "The audio file contains no speech."
+        }
       }
     },
     "models": {
@@ -432,6 +464,11 @@
       "retranscribeError": "Failed to re-transcribe. Please try again.",
       "transcribing": "Transcribing...",
       "transcriptionFailed": "Transcription failed. You can re-transcribe using the retry icon.",
+      "search": {
+        "placeholder": "Search transcriptions...",
+        "noResults": "No transcriptions matched your search.",
+        "clearSearch": "Clear search"
+      },
       "export": {
         "button": "Export",
         "formatLabel": "Format",
@@ -445,14 +482,13 @@
         "last7days": "Last 7 days",
         "last30days": "Last 30 days",
         "last3months": "Last 3 months",
-        "allTime": "All time",
         "confirmExport": "Export",
         "success": "Exported {{count}} entries successfully",
         "successZero": "No entries matched the filter",
         "error": "Export failed. Please try again.",
         "selectMode": "Select",
         "exitSelectMode": "Done",
-        "selectAll": "Select All",
+        "selectAll": "Select Loaded",
         "deselectAll": "Deselect All",
         "selectedCount": "{{count}} selected",
         "noSelection": "No entries selected",
@@ -555,6 +591,14 @@
         "title": "Support Development",
         "description": "Help us continue building Swil Flow",
         "button": "Donate"
+      },
+      "stats": {
+        "title": "Usage Statistics",
+        "totalTranscriptions": "Total Transcriptions",
+        "savedTranscriptions": "Saved Transcriptions",
+        "since": "Recording since",
+        "noData": "No transcriptions recorded yet.",
+        "loading": "Loading statistics..."
       },
       "acknowledgments": {
         "title": "Acknowledgments",

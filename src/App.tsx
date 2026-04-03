@@ -17,6 +17,7 @@ import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
+import { initAccentColor } from "@/lib/utils/accentColors";
 
 type OnboardingStep = "accessibility" | "model" | "done";
 
@@ -54,6 +55,13 @@ function App() {
   useEffect(() => {
     initializeRTL(i18n.language);
   }, [i18n.language]);
+
+  // Apply accent color when settings load or change
+  useEffect(() => {
+    if (settings?.accent_color) {
+      initAccentColor(settings.accent_color);
+    }
+  }, [settings?.accent_color]);
 
   // Initialize Enigo, shortcuts, and refresh audio devices when main app loads
   useEffect(() => {
@@ -97,49 +105,59 @@ function App() {
 
   // Listen for recording errors from the backend and show a toast
   useEffect(() => {
-    const unlisten = listen<RecordingErrorEvent>("recording-error", (event) => {
-      const { error_type, detail } = event.payload;
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
+    const setup = async () => {
+      const unlisten = await listen<RecordingErrorEvent>("recording-error", (event) => {
+        const { error_type, detail } = event.payload;
 
-      if (error_type === "microphone_permission_denied") {
-        const currentPlatform = platform();
-        const platformKey = `errors.micPermissionDenied.${currentPlatform}`;
-        const description = t(platformKey, {
-          defaultValue: t("errors.micPermissionDenied.generic"),
-        });
-        toast.error(t("errors.micPermissionDeniedTitle"), { description });
-      } else if (error_type === "no_input_device") {
-        toast.error(t("errors.noInputDeviceTitle"), {
-          description: t("errors.noInputDevice"),
-        });
-      } else {
-        toast.error(
-          t("errors.recordingFailed", { error: detail ?? "Unknown error" }),
-        );
-      }
-    });
-    return () => {
-      unlisten.then((fn) => fn());
+        if (error_type === "microphone_permission_denied") {
+          const currentPlatform = platform();
+          const platformKey = `errors.micPermissionDenied.${currentPlatform}`;
+          const description = t(platformKey, {
+            defaultValue: t("errors.micPermissionDenied.generic"),
+          });
+          toast.error(t("errors.micPermissionDeniedTitle"), { description });
+        } else if (error_type === "no_input_device") {
+          toast.error(t("errors.noInputDeviceTitle"), {
+            description: t("errors.noInputDevice"),
+          });
+        } else {
+          toast.error(
+            t("errors.recordingFailed", { error: detail ?? "Unknown error" }),
+          );
+        }
+      });
+      if (cancelled) { unlisten(); return; }
+      unlisteners.push(unlisten);
     };
+    setup();
+    return () => { cancelled = true; unlisteners.forEach((fn) => fn()); };
   }, [t]);
 
   // Listen for model loading failures and show a toast
   useEffect(() => {
-    const unlisten = listen<ModelStateEvent>("model-state-changed", (event) => {
-      if (event.payload.event_type === "loading_failed") {
-        toast.error(
-          t("errors.modelLoadFailed", {
-            model:
-              event.payload.model_name || t("errors.modelLoadFailedUnknown"),
-          }),
-          {
-            description: event.payload.error,
-          },
-        );
-      }
-    });
-    return () => {
-      unlisten.then((fn) => fn());
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
+    const setup = async () => {
+      const unlisten = await listen<ModelStateEvent>("model-state-changed", (event) => {
+        if (event.payload.event_type === "loading_failed") {
+          toast.error(
+            t("errors.modelLoadFailed", {
+              model:
+                event.payload.model_name || t("errors.modelLoadFailedUnknown"),
+            }),
+            {
+              description: event.payload.error,
+            },
+          );
+        }
+      });
+      if (cancelled) { unlisten(); return; }
+      unlisteners.push(unlisten);
     };
+    setup();
+    return () => { cancelled = true; unlisteners.forEach((fn) => fn()); };
   }, [t]);
 
   const revealMainWindowForPermissions = async () => {

@@ -66,6 +66,14 @@ pub struct HistoryEntry {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
+pub struct HistoryStats {
+    pub total_entries: i64,
+    pub saved_entries: i64,
+    pub earliest_timestamp: Option<i64>,
+    pub latest_timestamp: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Type)]
 #[serde(tag = "type")]
 pub enum ExportFilter {
     All,
@@ -668,6 +676,83 @@ impl HistoryManager {
         }
     }
 
+    /// Search history entries by a text query (case-insensitive LIKE on transcription and
+    /// post-processed text). Supports the same cursor-based pagination as `get_history_entries`.
+    pub async fn search_history_entries(
+        &self,
+        query: String,
+        cursor: Option<i64>,
+        limit: Option<usize>,
+    ) -> Result<PaginatedHistory> {
+        let conn = self.get_connection()?;
+        let limit = limit.unwrap_or(30).min(100);
+        let fetch_count = (limit + 1) as i64;
+        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+
+        let mut entries: Vec<HistoryEntry> = match cursor {
+            Some(cursor_id) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text,
+                            post_processed_text, post_process_prompt, post_process_requested
+                     FROM transcription_history
+                     WHERE id < ?1
+                       AND (transcription_text LIKE ?2 ESCAPE '\\'
+                            OR COALESCE(post_processed_text, '') LIKE ?2 ESCAPE '\\')
+                     ORDER BY id DESC
+                     LIMIT ?3",
+                )?;
+                let result = stmt
+                    .query_map(params![cursor_id, pattern, fetch_count], Self::map_history_entry)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                result
+            }
+            None => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, file_name, timestamp, saved, title, transcription_text,
+                            post_processed_text, post_process_prompt, post_process_requested
+                     FROM transcription_history
+                     WHERE transcription_text LIKE ?1 ESCAPE '\\'
+                        OR COALESCE(post_processed_text, '') LIKE ?1 ESCAPE '\\'
+                     ORDER BY id DESC
+                     LIMIT ?2",
+                )?;
+                let result = stmt
+                    .query_map(params![pattern, fetch_count], Self::map_history_entry)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                result
+            }
+        };
+
+        let has_more = entries.len() > limit;
+        if has_more {
+            entries.pop();
+        }
+        Ok(PaginatedHistory { entries, has_more })
+    }
+
+    /// Aggregate statistics about the transcription history.
+    pub async fn get_history_stats(&self) -> Result<HistoryStats> {
+        let conn = self.get_connection()?;
+        let stats = conn.query_row(
+            "SELECT
+                COUNT(*)              AS total_entries,
+                SUM(CASE WHEN saved = 1 THEN 1 ELSE 0 END) AS saved_entries,
+                MIN(timestamp)        AS earliest_timestamp,
+                MAX(timestamp)        AS latest_timestamp
+             FROM transcription_history",
+            [],
+            |row| {
+                Ok(HistoryStats {
+                    total_entries: row.get::<_, i64>(0)?,
+                    saved_entries: row.get::<_, i64>(1).unwrap_or(0),
+                    earliest_timestamp: row.get::<_, Option<i64>>(2)?,
+                    latest_timestamp: row.get::<_, Option<i64>>(3)?,
+                })
+            },
+        )?;
+        Ok(stats)
+    }
+
     /// Query entries for export with optional filtering.
     /// Returns entries in chronological order (oldest first) for readable export output.
     pub fn get_entries_for_export(&self, filter: &ExportFilter) -> Result<Vec<HistoryEntry>> {
@@ -709,31 +794,42 @@ impl HistoryManager {
                 if ids.is_empty() {
                     return Ok(Vec::new());
                 }
-                // Build dynamic IN clause
-                let placeholders: Vec<String> = ids
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| format!("?{}", i + 1))
-                    .collect();
-                let sql = format!(
-                    "SELECT id, file_name, timestamp, saved, title, transcription_text,
-                            post_processed_text, post_process_prompt, post_process_requested
-                     FROM transcription_history
-                     WHERE id IN ({})
-                     ORDER BY timestamp ASC",
-                    placeholders.join(", ")
-                );
-                let mut stmt = conn.prepare(&sql)?;
-                let params: Vec<Box<dyn rusqlite::types::ToSql>> = ids
-                    .iter()
-                    .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-                    .collect();
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                    params.iter().map(|p| p.as_ref()).collect();
-                let result = stmt
-                    .query_map(param_refs.as_slice(), Self::map_history_entry)?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                result
+                // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999.
+                // Chunk the IDs so no single query exceeds this limit, then
+                // merge and sort the results by timestamp for consistent output.
+                const CHUNK_SIZE: usize = 999;
+                let mut all_entries: Vec<HistoryEntry> = Vec::with_capacity(ids.len());
+
+                for chunk in ids.chunks(CHUNK_SIZE) {
+                    let placeholders: Vec<String> = chunk
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| format!("?{}", i + 1))
+                        .collect();
+                    let sql = format!(
+                        "SELECT id, file_name, timestamp, saved, title, transcription_text,
+                                post_processed_text, post_process_prompt, post_process_requested
+                         FROM transcription_history
+                         WHERE id IN ({})
+                         ORDER BY timestamp ASC",
+                        placeholders.join(", ")
+                    );
+                    let mut stmt = conn.prepare(&sql)?;
+                    let params: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
+                        .iter()
+                        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+                        .collect();
+                    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                        params.iter().map(|p| p.as_ref()).collect();
+                    let chunk_entries = stmt
+                        .query_map(param_refs.as_slice(), Self::map_history_entry)?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    all_entries.extend(chunk_entries);
+                }
+
+                // Re-sort the merged results from all chunks by timestamp.
+                all_entries.sort_by_key(|e| e.timestamp);
+                all_entries
             }
         };
 

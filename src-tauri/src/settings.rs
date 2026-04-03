@@ -305,6 +305,24 @@ impl Default for OrtAcceleratorSetting {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum AccentColor {
+    Pink,
+    Gold,
+    Orange,
+    Green,
+    Blue,
+    Purple,
+    Coral,
+}
+
+impl Default for AccentColor {
+    fn default() -> Self {
+        AccentColor::Pink
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Type)]
 #[serde(transparent)]
 pub(crate) struct SecretMap(HashMap<String, String>);
@@ -430,6 +448,8 @@ pub struct AppSettings {
     pub whisper_gpu_device: i32,
     #[serde(default)]
     pub extra_recording_buffer_ms: u64,
+    #[serde(default)]
+    pub accent_color: AccentColor,
 }
 
 fn default_model() -> String {
@@ -804,6 +824,7 @@ pub fn get_default_settings() -> AppSettings {
         ort_accelerator: OrtAcceleratorSetting::default(),
         whisper_gpu_device: default_whisper_gpu_device(),
         extra_recording_buffer_ms: 0,
+        accent_color: AccentColor::default(),
     }
 }
 

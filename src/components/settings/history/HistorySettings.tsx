@@ -8,9 +8,11 @@ import {
   Download,
   FolderOpen,
   RotateCcw,
+  Search,
   Square,
   Star,
   Trash2,
+  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -90,10 +92,26 @@ export const HistorySettings: React.FC = () => {
   const [exportScope, setExportScope] = useState<ExportScope>("all");
   const [exportTimeRange, setExportTimeRange] = useState("7d");
 
-  // Keep ref in sync for use in IntersectionObserver callback
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  // isSearchPending: user has typed but the 300ms debounce hasn't fired yet.
+  // isSearching:    the debounce fired and the backend query is in-flight.
+  // Both together prevent showing "no results" before any query has completed.
+  const [isSearchPending, setIsSearchPending] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref that mirrors searchQuery so event listener callbacks (set up with empty
+  // deps) can read the latest value without capturing a stale closure.
+  const searchQueryRef = useRef("");
+
+  // Keep refs in sync so callbacks with empty deps can read latest values
   useEffect(() => {
     entriesRef.current = entries;
   }, [entries]);
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
 
   const loadPage = useCallback(async (cursor?: number) => {
     const isFirstPage = cursor === undefined;
@@ -122,14 +140,71 @@ export const HistorySettings: React.FC = () => {
     }
   }, []);
 
+  const loadSearchPage = useCallback(
+    async (query: string, cursor?: number) => {
+      const isFirstPage = cursor === undefined;
+      if (!isFirstPage && loadingRef.current) return;
+      loadingRef.current = true;
+
+      if (isFirstPage) setIsSearching(true);
+
+      try {
+        const result = await commands.searchHistoryEntries(
+          query,
+          cursor ?? null,
+          PAGE_SIZE,
+        );
+        if (result.status === "ok") {
+          const { entries: newEntries, has_more } = result.data;
+          setEntries((prev) =>
+            isFirstPage ? newEntries : [...prev, ...newEntries],
+          );
+          setHasMore(has_more);
+        }
+      } catch (error) {
+        console.error("Failed to search history entries:", error);
+      } finally {
+        setIsSearching(false);
+        loadingRef.current = false;
+      }
+    },
+    [],
+  );
+
+  // Debounced search: fires 300 ms after the user stops typing.
+  // isSearchPending is set immediately so the empty-state branch never
+  // shows "no results" while the user is still typing.
+  const handleSearchChange = useCallback(
+    (query: string) => {
+      setSearchQuery(query);
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
+      if (query.trim() === "") {
+        setIsSearchPending(false);
+        loadPage();
+        return;
+      }
+      setIsSearchPending(true);
+      searchDebounceRef.current = setTimeout(() => {
+        setIsSearchPending(false);
+        loadSearchPage(query.trim());
+      }, 300);
+    },
+    [loadPage, loadSearchPage],
+  );
+
   // Initial load
   useEffect(() => {
     loadPage();
   }, [loadPage]);
 
-  // Infinite scroll via IntersectionObserver
+  // Infinite scroll via IntersectionObserver — uses search or normal load.
+  // Guard against isSearchPending too: if the debounce hasn't fired yet the
+  // current searchQuery may change before the observer callback runs, which
+  // would load a page for the wrong (stale) query term.
   useEffect(() => {
-    if (loading) return;
+    if (loading || isSearching || isSearchPending) return;
 
     const sentinel = sentinelRef.current;
     if (!sentinel || !hasMore) return;
@@ -140,7 +215,11 @@ export const HistorySettings: React.FC = () => {
         if (first.isIntersecting) {
           const lastEntry = entriesRef.current[entriesRef.current.length - 1];
           if (lastEntry) {
-            loadPage(lastEntry.id);
+            if (searchQuery.trim()) {
+              loadSearchPage(searchQuery.trim(), lastEntry.id);
+            } else {
+              loadPage(lastEntry.id);
+            }
           }
         }
       },
@@ -149,14 +228,19 @@ export const HistorySettings: React.FC = () => {
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [loading, hasMore, loadPage]);
+  }, [loading, isSearching, isSearchPending, hasMore, loadPage, loadSearchPage, searchQuery]);
 
   // Listen for new entries added from the transcription pipeline
   useEffect(() => {
     const unlisten = events.historyUpdatePayload.listen((event) => {
       const payload: HistoryUpdatePayload = event.payload;
       if (payload.action === "added") {
-        setEntries((prev) => [payload.entry, ...prev]);
+        // Only prepend when the user is NOT in an active search — appending a
+        // freshly transcribed entry that may not match the current query would
+        // break the logical integrity of the filtered results.
+        if (!searchQueryRef.current.trim()) {
+          setEntries((prev) => [payload.entry, ...prev]);
+        }
       } else if (payload.action === "updated") {
         setEntries((prev) =>
           prev.map((e) => (e.id === payload.entry.id ? payload.entry : e)),
@@ -223,16 +307,32 @@ export const HistorySettings: React.FC = () => {
   );
 
   const deleteAudioEntry = async (id: number) => {
-    // Optimistically remove
+    // Snapshot whether this entry was selected before we optimistically remove it,
+    // so we can restore the selection state if the backend delete fails.
+    const wasSelected = selectedIds.has(id);
+
+    // Optimistically remove from both the entry list and any active selection
     setEntries((prev) => prev.filter((e) => e.id !== id));
+    setSelectedIds((prev) => {
+      if (!prev.has(id)) return prev; // avoid unnecessary re-render
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     try {
       const result = await commands.deleteHistoryEntry(id);
       if (result.status !== "ok") {
-        // Reload on failure
+        // Restore selection before reloading so the entry re-appears selected
+        if (wasSelected) {
+          setSelectedIds((prev) => new Set([...prev, id]));
+        }
         loadPage();
       }
     } catch (error) {
       console.error("Failed to delete entry:", error);
+      if (wasSelected) {
+        setSelectedIds((prev) => new Set([...prev, id]));
+      }
       loadPage();
     }
   };
@@ -283,20 +383,30 @@ export const HistorySettings: React.FC = () => {
   let content: React.ReactNode;
 
   if (loading) {
+    // Initial page load — nothing to show yet
     content = (
       <div className="px-4 py-3 text-center text-text/60">
         {t("settings.history.loading")}
       </div>
     );
   } else if (entries.length === 0) {
+    // Only show "no results" once a search has actually completed (not while
+    // the debounce is pending or the backend query is in-flight).
+    const anySearchActive = isSearchPending || isSearching;
     content = (
       <div className="px-4 py-3 text-center text-text/60">
-        {t("settings.history.empty")}
+        {searchQuery.trim() && !anySearchActive
+          ? t("settings.history.search.noResults")
+          : searchQuery.trim()
+            ? t("settings.history.loading")
+            : t("settings.history.empty")}
       </div>
     );
   } else {
+    // Show entries; dim them slightly while a search query is resolving so the
+    // user gets visual feedback without the jarring full-blank-then-refill.
     content = (
-      <>
+      <div className={isSearching || isSearchPending ? "opacity-50 pointer-events-none" : ""}>
         <div className="divide-y divide-mid-gray/20">
           {entries.map((entry) => (
             <HistoryEntryComponent
@@ -315,18 +425,39 @@ export const HistorySettings: React.FC = () => {
         </div>
         {/* Sentinel for infinite scroll */}
         <div ref={sentinelRef} className="h-1" />
-      </>
+      </div>
     );
   }
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <div className="space-y-2">
-        <div className="px-4 flex items-center justify-between">
-          <div>
+        <div className="px-4 flex items-center justify-between gap-3">
+          <div className="shrink-0">
             <h2 className="text-xs font-medium text-mid-gray uppercase tracking-wide">
               {t("settings.history.title")}
             </h2>
+          </div>
+          {/* Search bar */}
+          <div className="flex-1 max-w-xs relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-mid-gray pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              placeholder={t("settings.history.search.placeholder")}
+              className="w-full pl-7 pr-7 py-1 text-xs bg-mid-gray/10 border border-mid-gray/30 rounded-md focus:outline-none focus:border-logo-primary placeholder-mid-gray/60 transition-colors"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => handleSearchChange("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-mid-gray hover:text-text transition-colors cursor-pointer"
+                title={t("settings.history.search.clearSearch")}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {isSelectMode && (
@@ -335,12 +466,12 @@ export const HistorySettings: React.FC = () => {
                   variant="ghost"
                   size="sm"
                   onClick={
-                    selectedIds.size === entries.length
+                    entries.length > 0 && selectedIds.size === entries.length
                       ? deselectAll
                       : selectAllLoaded
                   }
                 >
-                  {selectedIds.size === entries.length
+                  {entries.length > 0 && selectedIds.size === entries.length
                     ? t("settings.history.export.deselectAll")
                     : t("settings.history.export.selectAll")}
                 </Button>
@@ -357,8 +488,11 @@ export const HistorySettings: React.FC = () => {
             <div className="relative" ref={exportButtonRef}>
               <Button
                 onClick={() => {
-                  // Auto-set scope to "selected" when opening panel in select mode
-                  if (isSelectMode && selectedIds.size > 0) {
+                  // Auto-set scope to "selected" only when the panel is currently
+                  // closed and we are transitioning into it from select mode.
+                  // Avoid overriding a scope the user has already manually chosen
+                  // during a previous open of the same panel session.
+                  if (!showExportPanel && isSelectMode && selectedIds.size > 0) {
                     setExportScope("selected");
                   }
                   setShowExportPanel((prev) => !prev);
@@ -404,6 +538,7 @@ export const HistorySettings: React.FC = () => {
                   onScopeChange={setExportScope}
                   timeRange={exportTimeRange}
                   onTimeRangeChange={setExportTimeRange}
+                  anchorRef={exportButtonRef}
                 />
               )}
             </div>

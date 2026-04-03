@@ -477,6 +477,7 @@ impl TranscriptionManager {
 
         // Validate selected language against the model's supported languages.
         // If the language isn't supported, fall back to "auto" to prevent errors.
+        // Uses `any()` iterator short-circuit instead of `Vec::contains()` for clarity.
         let validated_language = if settings.selected_language == "auto" {
             "auto".to_string()
         } else {
@@ -487,7 +488,8 @@ impl TranscriptionManager {
                     info.supported_languages.is_empty()
                         || info
                             .supported_languages
-                            .contains(&settings.selected_language)
+                            .iter()
+                            .any(|l| l == &settings.selected_language)
                 })
                 .unwrap_or(true);
 

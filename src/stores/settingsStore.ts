@@ -18,6 +18,7 @@ interface SettingsStore {
   outputDevices: AudioDevice[];
   customSounds: { start: boolean; stop: boolean };
   postProcessModelOptions: Record<string, string[]>;
+  initialized: boolean;
 
   // Actions
   initialize: () => Promise<void>;
@@ -155,6 +156,8 @@ const settingUpdaters: {
     commands.changeWhisperGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  accent_color: (value) =>
+    commands.changeAccentColorSetting(value as string),
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -167,6 +170,7 @@ export const useSettingsStore = create<SettingsStore>()(
     outputDevices: [],
     customSounds: { start: false, stop: false },
     postProcessModelOptions: {},
+    initialized: false,
 
     // Internal setters
     setSettings: (settings) => set({ settings }),
@@ -574,6 +578,8 @@ export const useSettingsStore = create<SettingsStore>()(
 
     // Initialize everything
     initialize: async () => {
+      if (get().initialized) return;
+      set({ initialized: true });
       const { refreshSettings, checkCustomSounds, loadDefaultSettings } = get();
 
       // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)

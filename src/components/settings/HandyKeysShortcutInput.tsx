@@ -2,8 +2,8 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { formatKeyCombination } from "../../lib/utils/keyboard";
-import { ResetButton } from "../ui/ResetButton";
 import { SettingContainer } from "../ui/SettingContainer";
+import { ShortcutBadge } from "../ui/ShortcutBadge";
 import { useSettings } from "../../hooks/useSettings";
 import { useOsType } from "../../hooks/useOsType";
 import { commands } from "@/bindings";
@@ -76,23 +76,23 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   useEffect(() => {
     if (!isRecording) return;
 
-    let cleanup = false;
+    // cancelled is set to true by the cleanup function. Any listener that
+    // resolves after cleanup immediately unregisters itself so we never have
+    // an orphaned handy-keys-event listener running in the background.
+    let cancelled = false;
 
     const setupListener = async () => {
-      // Listen for key events from backend
       const unlisten = await listen<HandyKeysEvent>(
         "handy-keys-event",
         async (event) => {
-          if (cleanup) return;
+          if (cancelled) return;
 
           const { hotkey_string, is_key_down } = event.payload;
 
           if (is_key_down && hotkey_string) {
-            // Update both state (for display) and ref (for release handler)
             currentKeysRef.current = hotkey_string;
             setCurrentKeys(hotkey_string);
           } else if (!is_key_down && currentKeysRef.current) {
-            // Key released - commit the shortcut using the ref value
             const keysToCommit = currentKeysRef.current;
             try {
               await updateBinding(shortcutId, keysToCommit);
@@ -104,7 +104,6 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
                 }),
               );
 
-              // Reset to original binding on error
               if (originalBinding) {
                 try {
                   await updateBinding(shortcutId, originalBinding);
@@ -115,7 +114,8 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
               }
             }
 
-            // Stop recording
+            // Stop recording — check cancelled again since we awaited above
+            if (cancelled) return;
             if (unlistenRef.current) {
               unlistenRef.current();
               unlistenRef.current = null;
@@ -129,18 +129,25 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
         },
       );
 
+      // If cleanup already ran while we were awaiting listen(), unregister
+      // immediately so the listener never processes any events.
+      if (cancelled) {
+        unlisten();
+        return;
+      }
+
       unlistenRef.current = unlisten;
     };
 
     setupListener();
 
     return () => {
-      cleanup = true;
+      cancelled = true;
+      // Unregister any listener that completed setup before this cleanup ran.
       if (unlistenRef.current) {
         unlistenRef.current();
         unlistenRef.current = null;
       }
-      // Stop backend recording on unmount to prevent orphaned recording loops
       commands.stopHandyKeysRecording().catch(console.error);
     };
   }, [
@@ -263,25 +270,14 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
       disabled={disabled}
       layout="horizontal"
     >
-      <div className="flex items-center space-x-1">
-        {isRecording ? (
-          <div
-            ref={shortcutRef}
-            className="px-2 py-1 text-sm font-semibold border border-logo-primary bg-logo-primary/30 rounded-md"
-          >
-            {formatCurrentKeys()}
-          </div>
-        ) : (
-          <div
-            className="px-2 py-1 text-sm font-semibold bg-mid-gray/10 border border-mid-gray/80 hover:bg-logo-primary/10 rounded-md cursor-pointer hover:border-logo-primary"
-            onClick={startRecording}
-          >
-            {formatKeyCombination(binding.current_binding, osType)}
-          </div>
-        )}
-        <ResetButton
-          onClick={() => resetBinding(shortcutId)}
-          disabled={isUpdating(`binding_${shortcutId}`)}
+      <div ref={shortcutRef}>
+        <ShortcutBadge
+          currentBinding={binding.current_binding}
+          isRecording={isRecording}
+          recordingLabel={formatCurrentKeys()}
+          onStartRecording={startRecording}
+          onReset={() => resetBinding(shortcutId)}
+          isResetting={isUpdating(`binding_${shortcutId}`)}
         />
       </div>
     </SettingContainer>
